@@ -1,12 +1,18 @@
 <script>
   import { onMount } from 'svelte';
-  import { auth } from './lib/firebase.js';
+  import { auth, db } from './lib/firebase.js';
   import { onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut } from 'firebase/auth';
+  import { ref, set } from 'firebase/database';
   import ViewMap from "./views/ViewMap.svelte";
   import ViewRutas from "./views/ViewRutas.svelte";
+  import ViewPerfil from "./views/ViewPerfil.svelte";
+  import ViewIncidencias from "./views/ViewIncidencias.svelte";
+  import ViewKioscos from "./views/ViewKioscos.svelte";
+  import ViewQRs from "./views/ViewQRs.svelte";
 
   let currentTab = 'mapa';
   let initialFocusLocation = null;
+  let initialFocusRoute = null;
 
   let user = null;
   let email = '';
@@ -16,6 +22,13 @@
   let isRegistering = false;
 
   onMount(() => {
+    // Revisar si venimos de un código QR
+    const urlParams = new URLSearchParams(window.location.search);
+    const paradaQuery = urlParams.get('parada');
+    if (paradaQuery) {
+      initialFocusLocation = { name: paradaQuery };
+    }
+
     const unsubscribe = onAuthStateChanged(auth, (currentUser) => {
       user = currentUser;
       loading = false;
@@ -27,7 +40,15 @@
     try {
       errorMsg = '';
       if (isRegistering) {
-        await createUserWithEmailAndPassword(auth, email, password);
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        const newUser = userCredential.user;
+        
+        // Crear el perfil en la base de datos automáticamente
+        await set(ref(db, `usuarios/${newUser.uid}`), {
+          email: newUser.email
+          // Firebase Realtime Database borra automáticamente los objetos vacíos {}, 
+          // por lo que "favoritos" nacerá vacío y se creará solo cuando guarde la primera ruta.
+        });
       } else {
         await signInWithEmailAndPassword(auth, email, password);
       }
@@ -76,6 +97,34 @@
           <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22s-8-4.5-8-11.8A8 8 0 0 1 12 2a8 8 0 0 1 8 8.2c0 7.3-8 11.8-8 11.8z"/><circle cx="12" cy="10" r="3"/></svg>
           Directorio de Rutas
         </button>
+        <button 
+          class="nav-item {currentTab === 'perfil' ? 'active' : ''}" 
+          on:click={() => currentTab = 'perfil'}
+        >
+          <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+          Mi Perfil
+        </button>
+        <button 
+          class="nav-item {currentTab === 'incidencias' ? 'active' : ''}" 
+          on:click={() => currentTab = 'incidencias'}
+        >
+          <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path><line x1="12" y1="9" x2="12" y2="13"></line><line x1="12" y1="17" x2="12.01" y2="17"></line></svg>
+          Incidencias
+        </button>
+        <button 
+          class="nav-item {currentTab === 'kioscos' ? 'active' : ''}" 
+          on:click={() => currentTab = 'kioscos'}
+        >
+          <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="3" width="20" height="14" rx="2" ry="2"></rect><line x1="8" y1="21" x2="16" y2="21"></line><line x1="12" y1="17" x2="12" y2="21"></line></svg>
+          Kioscos
+        </button>
+        <button 
+          class="nav-item {currentTab === 'qrs' ? 'active' : ''}" 
+          on:click={() => currentTab = 'qrs'}
+        >
+          <svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><rect x="7" y="7" width="3" height="3"></rect><rect x="14" y="7" width="3" height="3"></rect><rect x="7" y="14" width="3" height="3"></rect><rect x="14" y="14" width="3" height="3"></rect></svg>
+          Códigos QR
+        </button>
       </nav>
       <div class="sidebar-footer">
         <button class="btn-logout" on:click={logout}>
@@ -86,12 +135,28 @@
     </aside>
     <main class="main-content">
       {#if currentTab === 'mapa'}
-        <ViewMap {initialFocusLocation} />
+        <ViewMap {initialFocusLocation} {initialFocusRoute} />
       {:else if currentTab === 'rutas'}
-        <ViewRutas on:stopSelected={(e) => {
-          initialFocusLocation = e.detail;
-          currentTab = 'mapa';
-        }} />
+        <ViewRutas 
+          on:stopSelected={(e) => {
+            initialFocusLocation = e.detail;
+            initialFocusRoute = null;
+            currentTab = 'mapa';
+          }}
+          on:routeSelected={(e) => {
+            initialFocusRoute = e.detail;
+            initialFocusLocation = null;
+            currentTab = 'mapa';
+          }} 
+        />
+      {:else if currentTab === 'perfil'}
+        <ViewPerfil {user} />
+      {:else if currentTab === 'incidencias'}
+        <ViewIncidencias />
+      {:else if currentTab === 'kioscos'}
+        <ViewKioscos />
+      {:else if currentTab === 'qrs'}
+        <ViewQRs />
       {/if}
     </main>
   </div>
