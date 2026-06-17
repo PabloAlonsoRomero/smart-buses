@@ -13,6 +13,7 @@
   let currentTab = 'mapa';
   let initialFocusLocation = null;
   let initialFocusRoute = null;
+  let initialRoutePlanner = null;
 
   let user = null;
   let email = '';
@@ -135,7 +136,7 @@
     </aside>
     <main class="main-content">
       {#if currentTab === 'mapa'}
-        <ViewMap {initialFocusLocation} {initialFocusRoute} />
+        <ViewMap {initialFocusLocation} {initialFocusRoute} {initialRoutePlanner} />
       {:else if currentTab === 'rutas'}
         <ViewRutas 
           on:stopSelected={(e) => {
@@ -150,7 +151,15 @@
           }} 
         />
       {:else if currentTab === 'perfil'}
-        <ViewPerfil {user} />
+        <ViewPerfil 
+          {user} 
+          on:traceRoute={(e) => {
+            initialRoutePlanner = e.detail;
+            initialFocusLocation = null;
+            initialFocusRoute = null;
+            currentTab = 'mapa';
+          }} 
+        />
       {:else if currentTab === 'incidencias'}
         <ViewIncidencias />
       {:else if currentTab === 'kioscos'}
@@ -462,5 +471,48 @@
 
   .btn-link:hover {
     text-decoration: underline;
+  }
+
+  @media (max-width: 768px) {
+    .app-layout {
+      flex-direction: column-reverse;
+    }
+    
+    .sidebar {
+      width: 100%;
+      height: auto;
+      flex-direction: row;
+      border-right: none;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+      z-index: 1000;
+    }
+
+    .sidebar-header, .sidebar-footer {
+      display: none;
+    }
+
+    .sidebar-nav {
+      display: flex;
+      flex-direction: row;
+      padding: 8px 4px;
+      justify-content: space-around;
+      align-items: center;
+      width: 100%;
+      overflow-x: auto;
+    }
+
+    .nav-item {
+      flex-direction: column;
+      gap: 4px;
+      font-size: 10px;
+      text-align: center;
+      padding: 8px 4px;
+      border-radius: 8px;
+      white-space: nowrap;
+    }
+
+    .nav-item svg {
+      margin: 0 auto;
+    }
   }
 </style>

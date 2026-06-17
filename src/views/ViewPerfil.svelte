@@ -1,20 +1,28 @@
 <script>
-  import { onMount } from 'svelte';
+  import { onMount, createEventDispatcher } from 'svelte';
   import { db } from '../lib/firebase.js';
   import { ref, get, set } from 'firebase/database';
+  import Autocomplete from '../components/Autocomplete.svelte';
 
   export let user;
+  
+  const dispatch = createEventDispatcher();
 
   let perfil = {
     nombre: '',
     telefono: '',
     emergencia_nombre: '',
-    emergencia_telefono: ''
+    emergencia_telefono: '',
+    rutas_favoritas: []
   };
+
+  let nuevaRuta = { nombre: '', origen: '', destino: '' };
 
   let isSaving = false;
   let saveSuccess = false;
   let errorMessage = '';
+
+  let puntosInteres = [];
 
   onMount(async () => {
     if (user) {
@@ -28,7 +36,36 @@
         console.error("Error cargando perfil:", err);
       }
     }
+
+    try {
+      const snap = await get(ref(db, 'puntos_interes'));
+      if (snap.exists()) {
+        puntosInteres = Object.keys(snap.val());
+      }
+    } catch (err) {
+      console.error("Error cargando puntos_interes:", err);
+    }
   });
+
+
+
+  const addRuta = () => {
+    if (!nuevaRuta.nombre || !nuevaRuta.origen || !nuevaRuta.destino) return;
+    if (!perfil.rutas_favoritas) perfil.rutas_favoritas = [];
+    perfil.rutas_favoritas = [...perfil.rutas_favoritas, { ...nuevaRuta, id: Date.now() }];
+    nuevaRuta = { nombre: '', origen: '', destino: '' };
+    saveProfile();
+  };
+
+  const removeRuta = (id) => {
+    if (!perfil.rutas_favoritas) return;
+    perfil.rutas_favoritas = perfil.rutas_favoritas.filter(r => r.id !== id);
+    saveProfile();
+  };
+
+  const trazarRuta = (ruta) => {
+    dispatch('traceRoute', { origen: ruta.origen, destino: ruta.destino });
+  };
 
   const saveProfile = async () => {
     if (!user) return;
@@ -87,6 +124,49 @@
           <label for="emergencia_telefono">Teléfono del Contacto</label>
           <input type="tel" id="emergencia_telefono" bind:value={perfil.emergencia_telefono} placeholder="Ej. 477 987 6543" required />
         </div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="form-section">
+        <h3 style="color: #f59e0b;"><svg viewBox="0 0 24 24" width="20" height="20" stroke="currentColor" stroke-width="2" fill="none" stroke-linecap="round" stroke-linejoin="round" style="margin-right: 8px;"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"></polygon></svg> ⭐ Mis Rutas Favoritas</h3>
+        <p class="section-desc">Guarda tus rutas frecuentes (ej. de tu casa a la escuela) para trazarlas rápidamente en el mapa.</p>
+        
+        <!-- Form to add new route -->
+        <div class="new-route-box">
+          <div class="input-group" style="margin-bottom: 12px;">
+            <input type="text" bind:value={nuevaRuta.nombre} placeholder="Nombre de la ruta (Ej. Casa a Universidad)" />
+          </div>
+          <div style="display:flex; gap:12px;">
+            <div class="input-group" style="flex:1; margin-bottom: 0;">
+              <Autocomplete bind:value={nuevaRuta.origen} placeholder="Origen (Ej. Puerta 1)" items={puntosInteres} />
+            </div>
+            <div class="input-group" style="flex:1; margin-bottom: 0;">
+              <Autocomplete bind:value={nuevaRuta.destino} placeholder="Destino (Ej. Lomas)" items={puntosInteres} />
+            </div>
+          </div>
+          <button type="button" class="btn-add-route" on:click={addRuta}>+ Añadir Ruta</button>
+        </div>
+
+        <!-- List of saved routes -->
+        {#if perfil.rutas_favoritas && perfil.rutas_favoritas.length > 0}
+          <div class="routes-list">
+            {#each perfil.rutas_favoritas as ruta}
+              <div class="route-item">
+                <div class="route-info">
+                  <strong>{ruta.nombre}</strong>
+                  <span>{ruta.origen} ➔ {ruta.destino}</span>
+                </div>
+                <div class="route-actions">
+                  <button type="button" class="btn-trace" on:click={() => trazarRuta(ruta)}>📍 Trazar en mapa</button>
+                  <button type="button" class="btn-delete" on:click={() => removeRuta(ruta.id)}>❌</button>
+                </div>
+              </div>
+            {/each}
+          </div>
+        {:else}
+          <p style="font-size:13px; color:#64748b; font-style:italic; margin-top:16px;">No tienes rutas guardadas.</p>
+        {/if}
       </div>
 
       {#if saveSuccess}
@@ -236,5 +316,96 @@
     margin-top: 24px;
     text-align: center;
     border: 1px solid rgba(239, 68, 68, 0.2);
+  }
+
+  .new-route-box {
+    background: rgba(0,0,0,0.2);
+    border: 1px dashed rgba(255,255,255,0.15);
+    border-radius: 12px;
+    padding: 16px;
+    margin-bottom: 24px;
+  }
+
+  .btn-add-route {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: #cbd5e1;
+    width: 100%;
+    padding: 10px;
+    border-radius: 8px;
+    margin-top: 12px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .btn-add-route:hover {
+    background: rgba(255,255,255,0.1);
+    color: white;
+  }
+
+  .routes-list {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .route-item {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(15,17,23,0.8);
+    border: 1px solid rgba(99,102,241,0.2);
+    padding: 12px 16px;
+    border-radius: 12px;
+  }
+
+  .route-info {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .route-info strong {
+    color: #f1f5f9;
+    font-size: 15px;
+  }
+
+  .route-info span {
+    color: #94a3b8;
+    font-size: 13px;
+  }
+
+  .route-actions {
+    display: flex;
+    gap: 8px;
+  }
+
+  .btn-trace {
+    background: rgba(99,102,241,0.15);
+    color: #818cf8;
+    border: 1px solid rgba(99,102,241,0.3);
+    padding: 6px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .btn-trace:hover {
+    background: rgba(99,102,241,0.3);
+    color: white;
+  }
+
+  .btn-delete {
+    background: rgba(239,68,68,0.1);
+    border: 1px solid rgba(239,68,68,0.2);
+    border-radius: 8px;
+    padding: 6px;
+    cursor: pointer;
+    transition: all 0.2s;
+  }
+
+  .btn-delete:hover {
+    background: rgba(239,68,68,0.3);
   }
 </style>

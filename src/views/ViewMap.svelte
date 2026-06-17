@@ -6,8 +6,23 @@
   import { ref, onValue, set, push } from 'firebase/database';
   import { Locate, BusFront, Map as MapIcon, Image as ImageIcon, XCircle, Building, Search, ShieldAlert, AlertTriangle } from 'lucide-svelte';
 
+  import MapLegend from '../components/MapLegend.svelte';
+  import SafeCommuteAlert from '../components/SafeCommuteAlert.svelte';
+  import SOSModal from '../components/SOSModal.svelte';
+  import IncidenciaModal from '../components/IncidenciaModal.svelte';
+
   export let initialFocusLocation = null;
   export let initialFocusRoute = null;
+  export let initialRoutePlanner = null;
+
+  $: if (initialRoutePlanner) {
+    routeMode = true;
+    origenQuery = initialRoutePlanner.origen;
+    destinoQuery = initialRoutePlanner.destino;
+    activeSearchField = null;
+    setTimeout(() => calculateRoute(origenQuery, destinoQuery), 500);
+    initialRoutePlanner = null;
+  }
 
   let mapContainer;
   let map;
@@ -20,6 +35,29 @@
   let puntosInteresData = {};
   let rutasData = {};
   let liveBusesData = {};
+  
+  window.renderPopups = () => {
+    // Re-render stop popups to update star icon
+    Object.keys(stopMarkers).forEach(stopName => {
+      const stop = stopMarkers[stopName];
+      if (stop.currentType === "Parada de Autobús") {
+        const popupHtml = `
+          <div class="popup-content">
+            <h3 style="margin-top:0; margin-bottom: 8px; color: #f1f5f9;">
+              ${stopName}
+            </h3>
+            <span class="popup-type" style="background-color: #6366f1;">Parada de Autobús</span>
+            <div id="eta-container-${stopName.replace(/\s+/g, '-')}">
+              <div style="margin-top: 8px; font-size: 13px; color: #94a3b8;">Cargando tiempos...</div>
+            </div>
+            <button class="popup-btn popup-btn-route" onclick="window.drawRouteToStop('${stopName}')" style="margin-top: 12px; width: 100%;">📍 Trazar ruta desde aquí</button>
+            <button class="popup-btn" onclick="window.openIncidenciaModal('${stopName}')" style="margin-top: 8px; width: 100%; background: linear-gradient(135deg, #f59e0b, #d97706);"><span style="margin-right:6px">⚠️</span> Reportar Incidencia</button>
+          </div>
+        `;
+        stop.marker.setPopupContent(popupHtml);
+      }
+    });
+  };
 
   let sosActive = false;
   let sosCountdown = 3;
@@ -30,23 +68,21 @@
   let safeCommuteFinished = false;
 
   let showIncidenciaModal = false;
-  let incidenciaTipo = 'Retraso';
   let incidenciaUbicacion = '';
-  let incidenciaDescripcion = '';
   let enviandoIncidencia = false;
 
   window.openIncidenciaModal = (stopName) => {
     showIncidenciaModal = true;
     incidenciaUbicacion = stopName;
-    incidenciaDescripcion = '';
   };
 
   const closeIncidenciaModal = () => {
     showIncidenciaModal = false;
   };
 
-  const reportarIncidencia = async () => {
-    if (!incidenciaDescripcion) {
+  const reportarIncidencia = async (event) => {
+    const { tipo, descripcion } = event.detail;
+    if (!descripcion) {
       alert("Por favor añade una breve descripción.");
       return;
     }
@@ -54,9 +90,9 @@
     try {
       const incRef = push(ref(db, 'incidencias'));
       await set(incRef, {
-        tipo: incidenciaTipo,
+        tipo: tipo,
         ubicacion: incidenciaUbicacion,
-        descripcion: incidenciaDescripcion,
+        descripcion: descripcion,
         fecha: new Date().toISOString(),
         usuario: auth.currentUser ? auth.currentUser.email : 'Anónimo'
       });
@@ -189,6 +225,7 @@
   });
 
   onMount(() => {
+
     // Initialize the map centered on a default location
     map = L.map(mapContainer, {
       zoomControl: false,
@@ -490,6 +527,17 @@
                     estado: etaInfo.estado,
                     info: info
                   });
+
+                  if (stopName === window.trackedStartStop && !window.hasNotifiedStartStop && etaInfo.estado === 'Llegando a paradero') {
+                    window.hasNotifiedStartStop = true;
+                    const title = '¡Tu autobús está llegando!';
+                    const body = `El autobús de la ruta ${routeId} está llegando a tu parada inicial (${stopName}).`;
+                    if ("Notification" in window && Notification.permission === "granted") {
+                      new Notification(title, { body });
+                    } else {
+                      alert(title + "\\n" + body);
+                    }
+                  }
                 }
               });
             });
@@ -706,6 +754,14 @@
           const parsed = getCoords(puntosInteres[s]);
           return [parsed.lat, parsed.lng];
         }).filter(c => c && !isNaN(c[0]));
+      }
+
+      if (bestRoute && bestRoute.startStop) {
+        window.trackedStartStop = bestRoute.startStop.name;
+        window.hasNotifiedStartStop = false;
+        if ("Notification" in window && Notification.permission !== "granted" && Notification.permission !== "denied") {
+          Notification.requestPermission();
+        }
       }
 
       // Caminata inicial
@@ -987,9 +1043,9 @@
           {#if hasActiveRoute}
             <button class="safe-commute-btn {safeCommuteActive ? 'active' : ''}" on:click={toggleSafeCommute}>
               {#if safeCommuteActive}
-                🛑 Cancelar Viaje Seguro
+                🛑 Cancelar
               {:else}
-                🛡️ Compartir Viaje Seguro
+                🛡️ Viaje Seguro
               {/if}
             </button>
           {/if}
@@ -1000,6 +1056,7 @@
             {#if activeSearchField === 'origen'}
               <li><button class="my-loc-btn" on:click={() => { origenQuery = "Mi ubicación actual"; activeSearchField = null; searchResults = []; calculateRoute(origenQuery, destinoQuery); }}>📍 Usar mi ubicación actual</button></li>
             {/if}
+
             {#each searchResults as result}
               <li><button on:click={() => handleSearchSelect(result)}>{result}</button></li>
             {/each}
@@ -1034,76 +1091,24 @@
   <!-- SOS Button -->
   <button class="sos-btn" on:click={triggerSOS} title="Botón de Pánico">SOS</button>
 
-
-
   {#if sosActive}
-    <div class="sos-modal-overlay">
-      <div class="sos-modal">
-        <ShieldAlert size={64} color="#ef4444" />
-        <h2>ALERTA DE SEGURIDAD</h2>
-        <p>Enviando ubicación a tus contactos de emergencia y seguridad en:</p>
-        <div class="countdown">{sosCountdown}</div>
-        <button class="btn-cancel-sos" on:click={cancelSOS}>Cancelar Alerta</button>
-      </div>
-    </div>
+    <SOSModal {countdown} on:cancel={cancelSOS} />
   {/if}
 
   {#if safeCommuteFinished}
-    <div class="safe-commute-success">
-      ✅ Has llegado a tu destino. Se ha notificado a tu contacto de emergencia.
-    </div>
+    <SafeCommuteAlert />
   {/if}
 
   {#if showIncidenciaModal}
-    <div class="sos-modal-overlay">
-      <div class="sos-modal incidencia-modal">
-        <h2 style="color: #f59e0b;">Reportar Incidencia</h2>
-        <p>Ayuda a la comunidad reportando unidades saturadas o retrasos.</p>
-        
-        <div class="form-group">
-          <label>Tipo de Incidencia</label>
-          <select bind:value={incidenciaTipo}>
-            <option>Retraso</option>
-            <option>Saturación</option>
-          </select>
-        </div>
-
-        <div class="form-group">
-          <label>Parada Afectada</label>
-          <input type="text" value={incidenciaUbicacion} readonly style="background: rgba(255,255,255,0.02); color: #cbd5e1; cursor: not-allowed;" />
-        </div>
-
-        <div class="form-group">
-          <label>Descripción</label>
-          <textarea bind:value={incidenciaDescripcion} placeholder="Ej: El camión pasó lleno y no hizo parada..." rows="3"></textarea>
-        </div>
-
-        <div class="modal-actions">
-          <button class="btn-cancel" on:click={closeIncidenciaModal} disabled={enviandoIncidencia}>Cancelar</button>
-          <button class="btn-submit" on:click={reportarIncidencia} disabled={enviandoIncidencia}>
-            {enviandoIncidencia ? 'Enviando...' : 'Reportar'}
-          </button>
-        </div>
-      </div>
-    </div>
+    <IncidenciaModal 
+      ubicacion={incidenciaUbicacion} 
+      enviando={enviandoIncidencia}
+      on:cancel={closeIncidenciaModal}
+      on:submit={reportarIncidencia}
+    />
   {/if}
 
-  <!-- Legend overlay -->
-  <div class="map-legend">
-    <h4>Leyenda</h4>
-    <div class="legend-item">
-      <span class="legend-dot" style="background: linear-gradient(135deg, #10b981, #059669);"></span>
-      <span>Edificio Campus</span>
-    </div>
-    <div class="legend-item">
-      <span class="legend-dot" style="background: linear-gradient(135deg, #ec4899, #f43f5e);"></span>
-      <span>Puerta / Acceso</span>
-    </div>
-    <div class="legend-item">
-      <span class="legend-dot" style="background: linear-gradient(135deg, #22d3ee, #3b82f6);"></span>
-      <span>Parada de autobús</span>
-    </div>
-  </div>
+  <MapLegend />
 </div>
 
 <style>
@@ -1454,199 +1459,6 @@
     100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
   }
 
-  .sos-modal-overlay {
-    position: fixed;
-    top: 0; left: 0; right: 0; bottom: 0;
-    background: rgba(0, 0, 0, 0.85);
-    backdrop-filter: blur(8px);
-    z-index: 9999;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-  }
-
-  .sos-modal {
-    background: #1e1b4b;
-    padding: 40px;
-    border-radius: 24px;
-    border: 2px solid #ef4444;
-    text-align: center;
-    box-shadow: 0 0 40px rgba(239, 68, 68, 0.4);
-    max-width: 400px;
-    color: white;
-  }
-
-  .sos-modal h2 {
-    color: #ef4444;
-    margin: 16px 0 8px 0;
-    font-size: 24px;
-    font-weight: 800;
-  }
-
-  .countdown {
-    font-size: 72px;
-    font-weight: 900;
-    color: white;
-    margin: 24px 0;
-  }
-
-  .btn-cancel-sos {
-    background: #475569;
-    color: white;
-    border: none;
-    padding: 12px 32px;
-    border-radius: 12px;
-    font-size: 16px;
-    font-weight: 600;
-    cursor: pointer;
-    width: 100%;
-    transition: background 0.2s;
-  }
-
-  .btn-cancel-sos:hover {
-    background: #64748b;
-  }
-
-
-
-  .incidencia-modal {
-    border-color: #f59e0b;
-    text-align: left;
-    max-width: 450px;
-    width: 90%;
-  }
-
-  .form-group {
-    margin-bottom: 16px;
-  }
-
-  .form-group label {
-    display: block;
-    margin-bottom: 8px;
-    color: #cbd5e1;
-    font-size: 14px;
-  }
-
-  .form-group select, .form-group input, .form-group textarea {
-    width: 100%;
-    padding: 10px;
-    border-radius: 8px;
-    background: rgba(255, 255, 255, 0.1);
-    border: 1px solid rgba(255, 255, 255, 0.2);
-    color: white;
-    font-family: inherit;
-    box-sizing: border-box;
-  }
-  
-  .form-group select option {
-    background: #1e1b4b;
-    color: white;
-  }
-
-  .modal-actions {
-    display: flex;
-    gap: 12px;
-    margin-top: 24px;
-  }
-
-  .modal-actions button {
-    flex: 1;
-    padding: 12px;
-    border-radius: 8px;
-    font-weight: 600;
-    border: none;
-    cursor: pointer;
-  }
-
-  .btn-cancel {
-    background: #475569;
-    color: white;
-  }
-
-  .btn-submit {
-    background: #f59e0b;
-    color: white;
-  }
-
-  .safe-commute-btn {
-    width: 100%;
-    margin-top: 12px;
-    padding: 12px;
-    background: linear-gradient(135deg, #22c55e, #16a34a);
-    color: white;
-    border: none;
-    border-radius: 12px;
-    font-size: 14px;
-    font-weight: 600;
-    cursor: pointer;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    gap: 8px;
-    transition: all 0.2s;
-  }
-
-  .safe-commute-btn.active {
-    background: linear-gradient(135deg, #f59e0b, #d97706);
-    animation: pulse-safe 2s infinite;
-  }
-
-  @keyframes pulse-safe {
-    0% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0.4); }
-    70% { box-shadow: 0 0 0 10px rgba(245, 158, 11, 0); }
-    100% { box-shadow: 0 0 0 0 rgba(245, 158, 11, 0); }
-  }
-
-  .safe-commute-success {
-    position: absolute;
-    top: 20px;
-    left: 50%;
-    transform: translateX(-50%);
-    background: rgba(34, 197, 94, 0.95);
-    color: white;
-    padding: 16px 24px;
-    border-radius: 16px;
-    font-weight: 600;
-    font-size: 15px;
-    z-index: 2000;
-    box-shadow: 0 8px 32px rgba(34, 197, 94, 0.4);
-    animation: slideDown 0.3s cubic-bezier(0.175, 0.885, 0.32, 1.275);
-  }
-
-  @keyframes slideDown {
-    from { top: -50px; opacity: 0; }
-    to { top: 20px; opacity: 1; }
-  }
-
-  .map-legend h4 {
-    margin: 0 0 10px;
-    font-size: 13px;
-    font-weight: 600;
-    color: #94a3b8;
-    text-transform: uppercase;
-    letter-spacing: 0.6px;
-  }
-
-  .legend-item {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    font-size: 13px;
-    color: #cbd5e1;
-  }
-
-  .legend-item + .legend-item {
-    margin-top: 6px;
-  }
-
-  .legend-dot {
-    width: 10px;
-    height: 10px;
-    border-radius: 50%;
-    flex-shrink: 0;
-    box-shadow: 0 0 6px currentColor;
-  }
-
   /* ── Custom bus markers ── */
   :global(.bus-marker) {
     background: none !important;
@@ -1791,8 +1603,54 @@
     }
 
     .map-legend {
-      bottom: 18px;
+      display: none; /* Ocultar leyenda en móviles para ahorrar espacio */
+    }
+
+    .route-planner-container {
+      flex-direction: column;
+      align-items: stretch;
+      padding: 12px;
+    }
+
+    .route-inputs {
+      flex-direction: column;
+      gap: 12px;
+      align-items: stretch;
+    }
+
+    .route-divider {
+      height: 1px;
+      width: 100%;
+      margin: 2px 0;
+    }
+
+    .route-input-group .search-input {
+      min-width: unset;
+    }
+
+    .close-route-btn {
+      position: absolute;
+      top: 8px;
+      right: 8px;
+    }
+
+    .safe-commute-btn {
+      width: 100%;
+    }
+
+    .sos-btn {
+      width: 48px;
+      height: 48px;
+      bottom: 20px;
       left: 10px;
+      font-size: 14px;
+    }
+
+    .locate-btn {
+      width: 40px;
+      height: 40px;
+      bottom: 24px;
+      right: 60px;
     }
   }
 </style>
